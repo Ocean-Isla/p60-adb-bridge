@@ -9,7 +9,7 @@ let SERIAL = null;
 
 function serial() {
   if (SERIAL) return SERIAL;
-  const out = execFileSync(ADB, ['devices'], { encoding: 'utf8', windowsHide: true });
+  const out = execFileSync(ADB, ['devices'], { encoding: 'utf8', input: '', timeout: 20000, windowsHide: true });
   const line = out.split(/\r?\n/).find(x => /\sdevice$/.test(x.trim()));
   if (!line) throw new Error('没找到已授权的设备，先跑 adb devices 看看');
   SERIAL = line.trim().split(/\s+/)[0];
@@ -19,6 +19,8 @@ function serial() {
 function adb(args, raw) {
   return execFileSync(ADB, ['-s', serial()].concat(args), {
     encoding: raw ? null : 'utf8',
+    input: '',
+    timeout: 60000,
     maxBuffer: 128 * 1024 * 1024,
     windowsHide: true,
   });
@@ -34,7 +36,12 @@ const tools = [
   { name: 'tap', description: '按坐标点一下屏幕', inputSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] }, run: a => T(adb(['shell', 'input', 'tap', num(a.x), num(a.y)])) },
   { name: 'long_press', description: '长按一个坐标', inputSchema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, ms: { type: 'number' } }, required: ['x', 'y'] }, run: a => T(adb(['shell', 'input', 'swipe', num(a.x), num(a.y), num(a.x), num(a.y), String(a.ms || 800)])) },
   { name: 'swipe', description: '从一点滑到另一点', inputSchema: { type: 'object', properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, ms: { type: 'number' } }, required: ['x1', 'y1', 'x2', 'y2'] }, run: a => T(adb(['shell', 'input', 'swipe', num(a.x1), num(a.y1), num(a.x2), num(a.y2), String(a.ms || 300)])) },
-  { name: 'input_text', description: '往当前的输入框里打字（英文数字符号可以，中文不支持）', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, run: a => T(adb(['shell', 'input', 'text', String(a.text).replace(/ /g, '%s')])) },
+  { name: 'input_text', description: '向当前输入框打字，中文英文都行（需先设好 ADBKeyboard 输入法）', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, run: a => {
+      const text = String(a.text == null ? '' : a.text);
+      const b64 = Buffer.from(text, 'utf8').toString('base64');
+      const r1 = adb(['shell', 'am', 'broadcast', '-a', 'ADB_INPUT_B64', '--es', 'msg', b64]);
+      return T('已输入：' + text + '\n' + (r1 || ''));
+    } },
   { name: 'key_event', description: '按一个键：HOME / BACK / ENTER / POWER / WAKEUP / VOLUME_UP / VOLUME_DOWN', inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }, run: a => T(adb(['shell', 'input', 'keyevent', String(a.key)])) },
   { name: 'launch_app', description: '按包名启动应用', inputSchema: { type: 'object', properties: { pkg: { type: 'string' } }, required: ['pkg'] }, run: a => T(adb(['shell', 'monkey', '-p', String(a.pkg), '-c', 'android.intent.category.LAUNCHER', '1'])) },
   { name: 'list_apps', description: '列出已安装应用的包名', inputSchema: { type: 'object', properties: { filter: { type: 'string' } } }, run: a => {
@@ -51,6 +58,8 @@ const tools = [
       return T(adb(['shell', 'cat', '/sdcard/ui.xml']));
     } },
   { name: 'open_url', description: '用手机浏览器打开一个网址', inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }, run: a => T(adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', String(a.url)])) },
+  { name: 'ime_list', description: '看手机上有哪些输入法', inputSchema: { type: 'object', properties: {} }, run: () => T(adb(['shell', 'ime', 'list', '-s'])) },
+  { name: 'ime_use', description: '把默认输入法切成 ADBKeyboard（中文打字前先用一次）', inputSchema: { type: 'object', properties: {}, run: () => T(adb(['shell', 'ime', 'enable', 'com.android.adbkeyboard/.AdbIME'])) } },
   { name: 'shell', description: '在手机上直接跑一条 shell 命令', inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] }, run: a => T(adb(['shell', String(a.command)])) },
 ];
 
@@ -76,7 +85,7 @@ function handle(msg, req, res) {
     return reply(id, { result: {
       protocolVersion: (params && params.protocolVersion) || '2025-06-18',
       capabilities: { tools: {} },
-      serverInfo: { name: 'p60-bridge', version: '1.0.0' },
+      serverInfo: { name: 'p60-bridge', version: '1.1.0' },
     } }, req, res);
   }
   if (method.startsWith('notifications/')) { res.writeHead(202); return res.end(); }
